@@ -7,7 +7,27 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const db = new Database(path.join(__dirname, 'comms.db'))
-const PORT = process.env.PORT || 3945
+const PORT = process.env.PORT || 3946
+
+// Telegram bot tokens for push notifications
+const AGENT_BOTS = {
+  atlas: { token: '8624575269:AAEUwq9tBoRR5UVc9XL4VX6jpxvtHfcaeVE', chatId: '614811138' },
+  // skynet doesn't need push — it checks inbox via heartbeat
+}
+
+async function pushToTelegram(toAgent, message) {
+  const bot = AGENT_BOTS[toAgent]
+  if (!bot) return
+  try {
+    const preview = message.body?.slice(0, 500) || ''
+    const text = `📬 Comms from ${message.from_agent}:\n${message.subject ? `📋 ${message.subject}\n\n` : ''}${preview}${message.body?.length > 500 ? '...\n\n[Full message in comms bus]' : ''}`
+    await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: bot.chatId, text })
+    })
+  } catch (e) { console.error('Push notification failed:', e.message) }
+}
 
 // WAL mode for concurrent access
 db.pragma('journal_mode = WAL')
@@ -97,6 +117,9 @@ app.post('/api/send', (req, res) => {
 
   // Update agent last_seen
   db.prepare("UPDATE agents SET last_seen = datetime('now'), status = 'online' WHERE id = ?").run(from)
+
+  // Push notification to recipient
+  pushToTelegram(to, { from_agent: from, subject: subject || '', body })
 
   res.json({ id, thread_id: tid, status: 'sent' })
 })
@@ -225,6 +248,9 @@ app.post('/api/delegate', (req, res) => {
     VALUES (?, ?, ?, ?, 'task', ?, ?, ?, ?)`)
     .run(id, tid, from, to, `Task: ${task.slice(0, 80)}`, task,
       JSON.stringify({ context, deadline, status: 'pending' }), priority || 'normal')
+
+  // Push task notification
+  pushToTelegram(to, { from_agent: from, subject: `Task: ${task.slice(0, 80)}`, body: task })
 
   res.json({ id, thread_id: tid, status: 'delegated' })
 })
